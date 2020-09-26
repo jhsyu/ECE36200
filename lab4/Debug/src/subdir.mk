@@ -10,6 +10,9 @@ C_SRCS += \
 ../src/syscalls.c \
 ../src/system_stm32f0xx.c 
 
+O_SRCS += \
+../src/autotest.o 
+
 OBJS += \
 ./src/main.o \
 ./src/syscalls.o \

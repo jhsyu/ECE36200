@@ -94,19 +94,46 @@
 .equ  BRR,      0x28
 
 //===========================================================
+.global gcd
+gcd:
 // gcd
 // Euclid's algorithm for Greatest Common Denominator
 // Find the GCD of the first two parameters.
 // Parameter2 1 and 2 are unsigned integers
 // Write the entire subroutine below.
-
+		push {lr}
+while0:
+		cmp	 r0, r1
+		beq  endwhile0
+if0:
+		cmp  r0,r1
+		bls  else0
+		subs r0,r1
+		b		 while0
+else0:
+		subs r1,r0
+		b    while0
+endwhile0:
+		pop  {pc}
 
 //===========================================================
 // enable_ports
 // Enable the RCC clock for GPIO ports A, B, and C.
 // Parameters: none
 // Write the entire subroutine below.
-
+.global enable_ports
+enable_ports:
+    push    {lr}
+    // Student code goes here
+    ldr  r0, =RCC
+    ldr  r1, [r0,#AHBENR]
+    ldr  r2, =GPIOBEN
+    orrs r1, r2
+    ldr  r2, =GPIOCEN
+    orrs r1, r2
+    str  r1, [r0,#AHBENR]
+    // End of student code
+    pop     {pc}
 
 //===========================================================
 // port_c_output
@@ -114,7 +141,17 @@
 // Do not modify any other pin's configuration.
 // Parameters: none
 // Write the entire subroutine below.
-
+.global port_c_output
+port_c_output:
+		push    {lr}
+		// Student code goes here
+		ldr  r0, =GPIOC
+		ldr  r1, [r0,#MODER]
+		ldr  r2, =#0x55000
+		orrs r1, r2
+		str  r1, [r0,#MODER]
+		// End of student code
+		pop     {pc}
 
 //===========================================================
 // port_b_input
@@ -123,14 +160,47 @@
 // Do not modify any other pin's configuration.
 // Parameters: none
 // Write the entire subroutine below.
+.global port_b_input
+port_b_input:
+    push    {lr}
+    // Student code goes here
+    ldr  r0, =GPIOB
+    ldr  r1, [r0,#MODER]
+    ldr  r2, =#0x3f0
+    bics r1, r2
+    str  r1, [r0,#MODER]
 
+		//configure as a pull down.
+		ldr  r1, [r0,#PUPDR]
+		movs r2, #0x30
+		bics r1, r2
+		movs r2, #0x20
+		orrs r1,r2
+		str  r1, [r0,#PUPDR]
+
+    // End of student code
+    pop     {pc}
 
 //===========================================================
-// toggle_portc_pin
+.global toggle_portc_pin
+toggle_portc_pin:
 // Change the ODR value from 0 to 1 or 1 to 0 for a specified
 // pin of Port C.
 // Parameters: r0 holds the pin number to toggle
 // Write the entire subroutine below.
+		push {lr}
+		ldr	 r1, =GPIOC
+		// r2: creare a mask watching the bit specified by r0.
+		movs r2,#1
+		lsls r2,r0
+		// look at bit [r0] only.
+		ldr  r3, [r1,#ODR]
+		//orrs r3,r2
+		eors r3,r2
+
+		// not equal: pin is high. toggle off.
+		str  r3,[r1,#ODR]
+		pop  {pc}
 
 
 //===========================================================
@@ -145,10 +215,8 @@ SysTick_Handler:
 	push {lr}
 	// Student code goes below
 
-  ldr  r0, =GPIOC
-  ldr  r1, =40
-  str  r1, [r0,#BSRR]
-
+  movs r0, #7
+	bl   toggle_portc_pin
 	// Student code goes above
 	pop  {pc}
 
@@ -160,12 +228,13 @@ SysTick_Handler:
 enable_systick:
 	push {lr}
 	// Student code goes below
-  //ldr  r0, =STK
-  //ldr  r1, =12000000
-  //str  r1,[r0,#RVR]
+  ldr  r0, =STK
+  ldr  r1, =2999999
+  str  r1,[r0,#RVR]
+	str  r1,[r0,#CVR]
 
-  //movs r2,#7
-  //str  r2,[r0,#CSR]
+  movs r2,#3
+  str  r2,[r0,#CSR]
 
 	// Student code goes above
 	pop  {pc}
@@ -177,12 +246,36 @@ enable_systick:
 // it to be a function.
 // It acknowledge the pending bit for pin 3, and it should
 // call toggle_portc_pin(8).
-
+.global EXTI2_3_IRQHandler
+.type EXTI2_3_IRQHandler, %function
+EXTI2_3_IRQHandler:
+	push {lr}
+	ldr	 r0, =EXTI
+	// acknowledge the interupt:
+	ldr  r1,=EXTI_PR_PR3
+	str	 r1, [r0,#PR]
+	// lit PC8
+	movs r0,#8
+	bl   toggle_portc_pin
+	pop  {pc}
 
 //===========================================================
 // Write the EXTI interrupt handler for pins 4-15 below.
 // It should acknowledge the pending bit for pin4, and it
 // should call toggle_portc_pin(9).
+.global EXTI4_15_IRQHandler
+.type EXTI4_15_IRQHandler, %function
+EXTI4_15_IRQHandler:
+	push {lr}
+	ldr	 r0, =EXTI
+	// acknowledge the interupt:
+	ldr  r1,=EXTI_PR_PR4
+	str	 r1, [r0,#PR]
+	// lit PC9
+	movs r0,#9
+	bl   toggle_portc_pin
+
+	pop  {pc}
 
 
 //===========================================================
@@ -194,7 +287,23 @@ enable_systick:
 enable_exti:
 	push {lr}
 	// Student code goes below
+	ldr 	r0, =RCC
+	ldr 	r1, =SYSCFGCOMPEN
+	ldr 	r2, [r0,#APB2ENR]
+	orrs  r2,r1
+	str	  r2, [r0,#APB2ENR]
 
+	// configure EXTICR1 & EXTICR2.
+	ldr 	r0, =SYSCFG
+	ldr 	r1,[r0,#EXTICR1]
+	ldr	  r2,=#0x1100
+	orrs  r1,r2
+	str 	r1,[r0,#EXTICR1]
+
+	ldr 	r1,[r0,#EXTICR2]
+	ldr   r2,=#0x1
+	orrs  r1,r2
+	str	  r1,[r0,#EXTICR2]
 	// Student code goes above
 	pop  {pc}
 
@@ -209,7 +318,15 @@ enable_exti:
 init_rtsr:
 	push {lr}
 	// Student code goes below
-
+	ldr 	r0,=EXTI
+	ldr   r1,[r0,#RTSR]
+	movs  r2,#EXTI_RTSR_TR2
+	orrs  r1,r2
+	movs  r2,#EXTI_RTSR_TR3
+	orrs  r1,r2
+	movs  r2,#EXTI_RTSR_TR4
+	orrs  r1,r2
+	str 	r1,[r0,#RTSR]
 	// Student code goes above
 	pop  {pc}
 
@@ -222,6 +339,15 @@ init_rtsr:
 init_imr:
 	push {lr}
 	// Student code goes below
+	ldr 	r0,=EXTI
+	ldr   r1,[r0,#IMR]
+	movs  r2,#EXTI_IMR_MR2
+	orrs  r1,r2
+	movs  r2,#EXTI_IMR_MR3
+	orrs  r1,r2
+	movs  r2,#EXTI_IMR_MR4
+	orrs  r1,r2
+	str 	r1,[r0,#IMR]
 
 	// Student code goes above
 	pop  {pc}
@@ -235,7 +361,12 @@ init_imr:
 init_iser:
 	push {lr}
 	// Student code goes below
-
+	ldr	  r0, =NVIC
+	ldr 	r1, =ISER
+	ldr 	r2, =1<<EXTI2_3_IRQn
+	ldr 	r3, =1<<EXTI4_15_IRQn
+	orrs  r2,r3
+	str 	r2, [r0,r1]
 	// Student code goes above
 	pop  {pc}
 
@@ -248,6 +379,15 @@ init_iser:
 adjust_priorities:
 	push {lr}
 	// Student code goes below
+	ldr 	r0, =NVIC
+	ldr   r1, =IPR
+	adds  r1, #4
+	ldr   r2,[r0,r1]
+	ldr   r3,=0xffff0000
+	bics  r2,r3
+	ldr 	r3, =0x80c00000
+	orrs  r2,r3
+	str   r2,[r0,r1]
 
 	// Student code goes above
 	pop  {pc}
@@ -260,7 +400,7 @@ login: .string "xu1392" // Change to your login
 .align 2
 .global main
 main:
-	//bl autotest // Uncomment when most things are working
+	bl autotest // Uncomment when most things are working
 	ldr  r0,=3000000000 // 3 billion
 	ldr  r1,=750000000  // 750 million
 	bl   gcd            // find the GCD
