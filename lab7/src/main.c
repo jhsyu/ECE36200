@@ -17,6 +17,16 @@ const char login[] = "xu1392";
 //============================================================================
 void setup_tim1()
 {
+	RCC-> AHBENR |= GPIOAEN;
+	// TIM1_CH1 PA8  	TIM1_CH2 PA9
+	// TIM1_CH3 PA10	TIM1_CH4 PA11
+
+	// Configure AF of PA 8-11
+	GPIOA -> MODER &= ~(0xff << 16);
+	GPIOA -> MODER |= (0xaa << 16);
+
+
+
 }
 
 //============================================================================
