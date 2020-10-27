@@ -10,6 +10,13 @@
 // Be sure to change this to your login...
 const char login[] = "xu1392";
 
+#define TIM1_BDTR_MOE			(1 << 15)
+#define TIM1_CCMR2_OC4PE	(1 << 11)
+#define TIM1_CCER_CC1E		(1 << 0 )
+#define TIM1_CCER_CC2E		(1 << 4 )
+#define TIM1_CCER_CC3E		(1 << 8 )
+#define TIM1_CCER_CC4E		(1 << 12)
+
 //============================================================================
 // setup_tim1()    (Autotest #1)
 // Configure Timer 1 and the PWM output pins.
@@ -17,15 +24,44 @@ const char login[] = "xu1392";
 //============================================================================
 void setup_tim1()
 {
-	RCC-> AHBENR |= GPIOAEN;
+	RCC-> AHBENR |= RCC_AHBENR_GPIOAEN;
 	// TIM1_CH1 PA8  	TIM1_CH2 PA9
 	// TIM1_CH3 PA10	TIM1_CH4 PA11
 
 	// Configure AF of PA 8-11
 	GPIOA -> MODER &= ~(0xff << 16);
-	GPIOA -> MODER |= (0xaa << 16);
+	GPIOA -> MODER |=  (0xaa << 16);
 
-
+	// enable RCC clock for TIM1
+	RCC -> APB2ENR |= RCC_APB2ENR_TIM1EN;
+	// Configure GPIOA -> AFR TIM1 output is AF2.
+	GPIOA -> AFR[1] &= ~(0xffff);
+	GPIOA -> AFR[1] |=  (0x2222);
+	// enable TIM1 in BDTR.
+	TIM1 -> BDTR |= TIM1_BDTR_MOE;
+	// set up clock.
+	TIM1 -> PSC = 1 - 1;
+	TIM1 -> ARR = 2400 - 1;
+	//set PWM mode 1.
+	TIM1 -> CCMR1 &= ~(0b111 << 4);
+	TIM1 -> CCMR1 |=  (0b110 << 4);
+	TIM1 -> CCMR1 &= ~(0b111 << 12);
+	TIM1 -> CCMR1 |=  (0b110 << 12);
+	TIM1 -> CCMR2 &= ~(0b111 << 4);
+	TIM1 -> CCMR2 |=  (0b110 << 4);
+	TIM1 -> CCMR2 &= ~(0b111 << 12);
+	TIM1 -> CCMR2 |=  (0b110 << 12);
+	// set preload_en for TIM1_CH4.
+	TIM1 -> CCMR2 |= TIM1_CCMR2_OC4PE;
+	// enable channel output.
+	TIM1 -> CCER |= TIM1_CCER_CC1E;
+	TIM1 -> CCER |= TIM1_CCER_CC2E;
+	TIM1 -> CCER |= TIM1_CCER_CC3E;
+	TIM1 -> CCER |= TIM1_CCER_CC4E;
+	// enable the timer.
+	//TIM1 -> DIER |= TIM_DIER_UIE;
+	TIM1 -> CR1 |= TIM_CR1_CEN;
+	//NVIC -> ISER[0] |= (1 << TIM1_CC_IRQn);
 
 }
 
@@ -42,8 +78,9 @@ short int wavetable[N];
 // wavetable[] array.
 // Parameters: none
 //============================================================================
-void init_wavetable(void)
-{
+void init_wavetable(void){
+  for(int i=0; i < N; i++)
+    wavetable[i] = 32767 * sin(2 * M_PI * i / N);
 }
 
 //============================================================================
@@ -64,16 +101,38 @@ int offsetd = 0; // not used
 // Set the four step and four offset variables based on the frequency.
 // Parameters: f: The floating-point frequency desired.
 //============================================================================
-void set_freq_a(float f)
-{
+void set_freq_a(float f){
+  stepa = f * N / RATE * (1<<16);
+  if (f == 0) {
+    stepa = 0;
+    offseta = 0;
+  }
 }
 
-void set_freq_b(float f)
-{
+void set_freq_b(float f){
+  stepb = f * N / RATE * (1<<16);
+  if (f == 0) {
+    stepb = 0;
+    offsetb = 0;
+  }
 }
 
-void set_freq_c(float f)
-{
+void set_freq_c(float f){
+  stepc = f * N / RATE * (1<<16);
+  if (f == 0) {
+    stepc = 0;
+    offsetc = 0;
+  }
+
+}
+
+void set_freq_d(float f){
+  stepd = f * N / RATE * (1<<16);
+  if (f == 0) {
+    stepd = 0;
+    offsetd = 0;
+  }
+
 }
 
 
@@ -83,6 +142,29 @@ void set_freq_c(float f)
 // Parameters: none
 // (Write the entire subroutine below.)
 //============================================================================
+void TIM6_DAC_IRQHandler() {
+  // acknowledge interrupt.
+  TIM6 -> SR &= !(TIM_SR_UIF);
+  //DAC -> SWTRIGR |= DAC_SWTRIGR_SWTRIG1;
+  offseta += stepa;
+  if ((offseta >> 16) >= N) offseta -= (N << 16);
+  offsetb += stepb;
+  if ((offsetc >> 16) >= N) offsetc -= (N << 16);
+  offsetc += stepc;
+  if ((offsetb >> 16) >= N) offsetb -= (N << 16);
+  offsetd += stepd;
+  if ((offsetd >> 16) >= N) offsetd -= (N << 16);
+  int sample = wavetable[offseta >> 16]
+             + wavetable[offsetb >> 16]
+             + wavetable[offsetc >> 16]
+             + wavetable[offsetd >> 16];
+  //sample = (sample >> 5) + 2048;
+	sample = ((sample * volume) >> 17) + 1200;
+  if (sample > 4095) sample = 4095;
+  else if (sample < 0) sample = 0;
+  TIM1 -> CCR4 = sample;
+
+}
 
 
 //============================================================================
@@ -90,8 +172,16 @@ void set_freq_c(float f)
 // Set the four step and four offset variables based on the frequency.
 // Parameters: f: The floating-point frequency desired.
 //============================================================================
-void setup_tim6()
-{
+void setup_tim6(void){
+  // enable RCC clock for TIM6.
+  RCC -> APB1ENR |= RCC_APB1ENR_TIM6EN;
+  // set ARR and PSC value.
+  TIM6 -> PSC = 60 - 1;
+  TIM6 -> ARR = 40 - 1;
+  // write UIE bit.
+  TIM6 -> DIER |= TIM_DIER_UIE;
+  TIM6 -> CR1 |= TIM_CR1_CEN;
+  NVIC -> ISER[0] |= (1 << TIM6_DAC_IRQn);
 }
 
 //============================================================================
@@ -99,8 +189,29 @@ void setup_tim6()
 // Configure GPIO Ports B and C.
 // Parameters: none
 //============================================================================
-void enable_ports()
-{
+void enable_ports(){
+	RCC -> AHBENR |= RCC_AHBENR_GPIOBEN;
+	// set PB0 - pb3 as output.
+	for (int i = 0; i < 4; i++) {
+		GPIOB -> MODER &= ~(0b11 << (2*i));
+		GPIOB -> MODER |= (0b01 << (2*i));
+	}
+	for (int i = 4; i < 8; i++) {
+		// set PB4 - PB7 as input.
+		GPIOB -> MODER &= ~(0b11 << (2*i));
+		// set PB4 - PB7 as pull down.
+		GPIOB -> PUPDR &= ~(0b11 << (2*i));
+		GPIOB -> PUPDR |=  (0b10 << (2*i));
+	}
+
+
+	RCC -> AHBENR |= RCC_AHBENR_GPIOCEN;
+	// set PC0 - PC10 as output.
+	for (int i = 0; i < 11; i++) {
+		GPIOC -> MODER &= ~(0b11 << (2*i));
+		GPIOC -> MODER |=  (0b01 << (2*i));
+	}
+
 }
 
 char offset;
@@ -115,8 +226,9 @@ int  qout;
 // Output a single digit on the seven-segment LED array.
 // Parameters: none
 //============================================================================
-void show_digit()
-{
+void show_digit(){
+	int off = offset & 7;
+	GPIOC -> ODR = (off << 8) | display[off];
 }
 
 //============================================================================
@@ -124,8 +236,9 @@ void show_digit()
 // Set the row active on the keypad matrix.
 // Parameters: none
 //============================================================================
-void set_row()
-{
+void set_row(){
+	int row = offset & 3;
+	GPIOB -> BSRR = 0xf0000 | (1 << row);
 }
 
 //============================================================================
@@ -134,8 +247,8 @@ void set_row()
 // Parameters: none
 // Return value: The 4-bit value read from PC[7:4].
 //============================================================================
-int get_cols()
-{
+int get_cols(){
+	return (GPIOB->IDR >> 4) & 0xf;
 }
 
 //============================================================================
@@ -143,8 +256,9 @@ int get_cols()
 // Insert the key index number into the two-entry queue.
 // Parameters: n: the key index number
 //============================================================================
-void insert_queue(int n)
-{
+void insert_queue(int n){
+	queue[qin] = n | 0x80;
+	qin = (qin == 0) ? 1 : 0;
 }
 
 //============================================================================
@@ -153,8 +267,14 @@ void insert_queue(int n)
 // If a history entry is updated to 0x01, insert it into the queue.
 // Parameters: none
 //============================================================================
-void update_hist(int cols)
-{
+void update_hist(int cols){
+	int row = offset & 3;
+	for (int i = 0; i < 4; i++) {
+		history[4*row + i] = (history[4*row+i]<<1) + ((cols>>i)&1);
+		if (history[4*row + i] == 0x1) {
+			insert_queue(4 * row + i);
+		}
+	}
 }
 
 //============================================================================
@@ -163,15 +283,32 @@ void update_hist(int cols)
 // Parameters: none
 // (Write the entire subroutine below.)
 //============================================================================
-
+void TIM7_IRQHandler(){
+	TIM7 -> SR &= !(TIM_SR_UIF);
+	show_digit();
+  int cols = get_cols();
+  update_hist(cols);
+  offset = (offset + 1) & 0x7; // count 0 ... 7 and repeat
+  set_row();
+}
 
 //============================================================================
 // setup_tim7()    (Autotest #10)
 // Configure timer 7.
 // Parameters: none
 //============================================================================
-void setup_tim7()
-{
+void setup_tim7(){
+	// enable RCC clock for TIM6.
+	RCC -> APB1ENR |=  RCC_APB1ENR_TIM7EN;
+	RCC -> APB1ENR &= ~RCC_APB1ENR_TIM6EN;
+	// set ARR and PSC value.
+	TIM7 -> PSC = 800 - 1;
+	TIM7 -> ARR = 60 - 1;
+	// write UIE bit.
+	TIM7 -> DIER |= TIM_DIER_UIE;
+	TIM7 -> CR1 |= TIM_CR1_CEN;
+	NVIC -> ISER[0] |= (1 << TIM7_IRQn);
+
 }
 
 //============================================================================
@@ -180,11 +317,37 @@ void setup_tim7()
 // Parameters: none
 // Return value: The ASCII value of the button pressed.
 //============================================================================
-int getkey()
-{
-	return 0; // replace this
+int getkey(){
+	for(;;) {
+		asm volatile ("wfi" : :);   			// wait for an interrupt
+		if (queue[qout] == 0) continue;   // go back to waiting
+		else {
+			char temp = queue[qout];
+			queue[qout] = 0;
+			qout = (qout == 1) ? 0 : 1;
+			temp &= 0x7f;
+			switch (temp) {
+				case 0: return '1';
+				case 1: return '2';
+				case 2: return '3';
+				case 3: return 'A';
+				case 4: return '4';
+				case 5: return '5';
+				case 6: return '6';
+				case 7: return 'B';
+				case 8: return '7';
+				case 9: return '8';
+				case 10: return '9';
+				case 11: return 'C';
+				case 12: return '*';
+				case 13: return '0';
+				case 14: return '#';
+				case 15: return 'D';
+			}
+		}
+	}
+	return 0;
 }
-
 //============================================================================
 // This is a partial ASCII font for 7-segment displays.
 // See how it is used below.
@@ -318,8 +481,19 @@ int getrgb()
 // Update the CCR values appropriately.
 // Parameters: rgb: the RGB color component values
 //============================================================================
-void setrgb(int rgb)
-{
+void setrgb(int rgb){
+	int r 	= (rgb >> (4*4)) & 0xff;
+	int g 	= (rgb >> (4*2)) & 0xff;
+	int b 	= (rgb >> (4*0)) & 0xff;
+
+	int arr = TIM1 -> ARR;
+	r = ((r >> 4) * 10 + (r & 0xf)) * (arr + 1) / 100;
+	g = ((g >> 4) * 10 + (g & 0xf)) * (arr + 1) / 100;
+	b = ((b >> 4) * 10 + (b & 0xf)) * (arr + 1) / 100;
+
+	TIM1 -> CCR1 = (arr + 1) - r;
+	TIM1 -> CCR2 = (arr + 1) - g;
+	TIM1 -> CCR3 = (arr + 1) - b;
 }
 
 void internal_clock();
@@ -329,8 +503,9 @@ void autotest();
 int main(void)
 {
 	//internal_clock();
-	demo();
-	//autotest();
+	//demo();
+
+    autotest();
 	enable_ports();
 	init_wavetable();
 	set_freq_a(261.626); // Middle 'C'
@@ -358,4 +533,10 @@ int main(void)
 		else if (key == 'D')
 		setrgb(getrgb());
 	}
+
+
+	//setup_tim1();
+	//int rgb = 0x112599;
+	//setrgb(rgb);
+
 }
