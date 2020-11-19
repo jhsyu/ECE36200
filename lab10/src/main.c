@@ -36,7 +36,7 @@ void setup_usart5() {
   USART5 -> CR1 &= ~USART_CR1_UE;
   // Set a word size of 8 bits.
   // 8bit: M[1:0] = 00
-  USART5 -> CR1 &= ~(USART_CR1_M0 | USART_CR1_M1);
+  USART5 -> CR1 &= ~USART_CR1_M;
   // Set it for one stop bit.
   USART5 -> CR2 &= ~(USART_CR2_STOP);
   // Set it for no parity.
@@ -44,14 +44,14 @@ void setup_usart5() {
   // Use 16x oversampling.
   USART5 -> CR1 &= ~(USART_CR1_OVER8);
   // Use a baud rate of 115200 (115.2 kbaud).
-  USART5 -> BRR = 115200;
+  USART5 -> BRR = (uint16_t) (48000000 / 115200);
   // Enable the transmitter and the receiver by setting the TE and RE bits.
   USART5 -> CR1 |= USART_CR1_TE | USART_CR1_RE;
   // Enable the USART.
   USART5 -> CR1 |= USART_CR1_UE;
   // Finally, you should wait for the TE and RE bits to be acknowledged.
   // This indicates that the USART is ready to transmit and receive.
-  while (USART5 -> CR1 & (USART_CR1_TE | USART_CR1_RE) != (USART_CR1_RE | USART_CR1_TE));
+  while (((USART5 -> CR1) & (USART_CR1_TE | USART_CR1_RE)) != (USART_CR1_RE | USART_CR1_TE));
 }
 
 

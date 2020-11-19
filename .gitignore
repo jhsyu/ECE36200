@@ -50,3 +50,15 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+
+# project files
+CMSIS
+Debug
+startup
+StdPeriph_Driver
+LinkerScript.ld
+.settings
+.cproject
+.project
+*/.gitignore
+*.cfg
