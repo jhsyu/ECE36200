@@ -61,7 +61,7 @@ int simple_putchar(int ch) {
   while (((USART5 -> ISR) & USART_ISR_TXE) != USART_ISR_TXE);
   // Write the argument to the USART5 TDR (transmit data register).
   USART5 -> TDR = (uint8_t) ch;
-  // Return the argument that was passed in. That's how putchar() is defined to work.
+  // Return the argument that was passed in.
   return ch;
 }
 
@@ -96,13 +96,11 @@ int better_getchar() {
 }
 
 int interrupt_getchar() {
-  int ch = 0;
-  if (fifo_newline(&input_fifo) == 0) {
+  char ch;
+  while(fifo_newline(&input_fifo) == 0) {
     asm volatile ("wfi");
   }
-  else {
-    ch = fifo_remove(&input_fifo);
-  }
+  ch = fifo_remove(&input_fifo);
   return ch;
 }
 
@@ -111,7 +109,7 @@ void USART3_4_5_6_7_8_IRQHandler() {
   if ((USART5 -> ISR & USART_ISR_ORE) == USART_ISR_ORE)
   USART5 -> ICR |= USART_ICR_ORECF;
   // Read the new character from the USART5 RDR.
-  int newch = USART5 -> RDR;
+  char newch = USART5 -> RDR;
   // Check if the input_fifo is full. If it is, return from the ISR.
   // (Throw away the character.)
   int rtv = fifo_full(&input_fifo);
@@ -121,14 +119,82 @@ void USART3_4_5_6_7_8_IRQHandler() {
 
 }
 
+void enable_tty_interrupt() {
+  USART5 -> CR1 |= USART_CR1_RXNEIE;
+  NVIC -> ISER[0] |= (1 << 29);
+}
+
+void setup_spi1() {
+  // Enable the RCC clock to GPIOA.
+  RCC -> AHBENR |= RCC_AHBENR_GPIOAEN;
+  // Configure PA1 to be a general-purpose output.
+  GPIOA -> MODER &= ~(0b11 << (1*2));
+  GPIOA -> MODER |=  (0b01 << (1*2));
+  // Configure GPIOA so that pins 5, 6, and 7 are routed to SPI1.
+  // PA5: SPI1_SCK
+  // PA6: SPI1_MISO
+  // PA7: SPI1_MOSI
+  GPIOA -> MODER &= ~(0x3f << (5*2));
+  GPIOA -> MODER |=  (0x2a << (5*2));
+  GPIOA -> AFR[0] &= ~(0xfff << (4*5));
+  // Enable the internal pull-up resistor for pin 6 (MISO).
+  GPIOA -> PUPDR &= ~(0b11 << (6*2));
+  GPIOA -> PUPDR |=  (0b01 << (6*2));
+  // Enable the RCC clock to the SPI1 peripheral.
+  RCC -> APB2ENR |= RCC_APB2ENR_SPI1EN;
+  // Disable the SPI1 peripheral by turning off the SPE bit.
+  SPI1 -> CR1 &= ~SPI_CR1_SPE;
+  // Set it for as low a baud rate as possible.
+  SPI1 -> CR1 &= ~SPI_CR1_BR;
+  // Ensure that BIDIMODE and BIDIOE are cleared.
+  SPI1 -> CR1 &= ~(SPI_CR1_BIDIOE | SPI_CR1_BIDIMODE);
+  // Enable Master mode.
+  SPI1 -> CR1 |= SPI_CR1_MSTR;
+  // Set NSSP and configure the peripheral for an 8-bit word (default).
+  SPI1 -> CR2 |= SPI_CR2_NSSP;
+  SPI1 -> CR2 &= ~SPI_CR2_DS;
+  SPI1 -> CR2 |= SPI_CR2_DS_0 | SPI_CR2_DS_1 | SPI_CR2_DS_2;
+  // Set the bit that sets the FIFO-reception threshold to 8-bits.
+  SPI1 -> CR2 |= SPI_CR2_FRXTH;
+  // Enable the SPI1 peripheral.
+  SPI1 -> CR1 |= SPI_CR1_SPE;
+}
+
+void spi_high_speed() {
+  // Disables the SPI1 SPE bit.
+  SPI1 -> CR1 &= ~SPI_CR1_SPE;
+  // Configure SPI1 for a 6 MHz SCK rate.
+  SPI1 -> CR1 &= ~SPI_CR1_BR;
+  SPI1 -> CR1 |= SPI_CR1_BR_1;
+  // Re-enable the SPI1 SPE bit.
+  SPI1 -> CR1 |= SPI_CR1_SPE;
+}
+
+void TIM14_IRQHandler() {
+  // Acknowledge the interrupt.
+  TIM14 -> SR &= ~(TIM_SR_UIF);
+  // Invoke advance_fattime()
+  advance_fattime();
+}
+
+void setup_tim14() {
+  // f = 0.5hz.
+  RCC -> APB1ENR |= RCC_APB1ENR_TIM14EN;
+  TIM14 -> PSC = 960000 - 1;
+  TIM14 -> ARR = 100 - 1;
+  TIM14 -> DIER |= TIM_DIER_UIE;
+  TIM14 -> CR1 |= TIM_CR1_CEN;
+  NVIC -> ISER[0] |= (1 << 19);
+
+}
+
 int __io_putchar(int ch) {
   return better_putchar(ch);
 }
 
 int __io_getchar(void) {
-  return line_buffer_getchar();
+  return interrupt_getchar();
 }
-
 
 
 
@@ -175,23 +241,23 @@ int main()
 
     // Test for 2.7
     //
-    //enable_tty_interrupt();
-    //for(;;) {
-    //    printf("Enter string: ");
-    //    char line[100];
-    //    fgets(line, 99, stdin);
-    //    line[99] = '\0'; // just in case
-    //    printf("You entered: %s", line);
-    //}
+    // enable_tty_interrupt();
+    // for(;;) {
+    //     printf("Enter string: ");
+    //     char line[100];
+    //     fgets(line, 99, stdin);
+    //     line[99] = '\0'; // just in case
+    //     printf("You entered: %s", line);
+    // }
 
     // Test for 2.8 Test the command shell and clock.
-    //
-    //enable_tty_interrupt();
-    //setup_tim14();
-    //FATFS fs_storage;
-    //FATFS *fs = &fs_storage;
-    //f_mount(fs, "", 1);
-    //command_shell();
+
+    enable_tty_interrupt();
+    setup_tim14();
+    FATFS fs_storage;
+    FATFS *fs = &fs_storage;
+    f_mount(fs, "", 1);
+    command_shell();
 
     return 0;
 }
