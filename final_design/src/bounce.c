@@ -6,6 +6,13 @@
 #include <string.h>
 #include "lcd.h"
 
+#define TIM1_BDTR_MOE           (1 << 15)
+#define TIM1_CCMR2_OC4PE    (1 << 11)
+#define TIM1_CCER_CC1E      (1 << 0 )
+#define TIM1_CCER_CC2E      (1 << 4 )
+#define TIM1_CCER_CC3E      (1 << 8 )
+#define TIM1_CCER_CC4E      (1 << 12)
+
 
 void setup_tim17()
 {
@@ -69,6 +76,9 @@ void setup_spi1()
   SPI1 -> CR1 |= SPI_CR1_SPE;
 }
 
+//============================================================================
+// segment display functions
+//============================================================================
 char offset = 0; // decide whihch segment display to light. (0-7)
 char display[8]; // the data buffer for 8 segment display.
 int score = 0;
@@ -116,9 +126,7 @@ void setup_portc() {
   }
 
 }
-//============================================================================
-// segment display functions
-//============================================================================
+
 void show_digit(){
 	int off = offset & 7;
 	GPIOC -> ODR = (off << 8) | display[off];
@@ -140,6 +148,26 @@ void segdisp_update() {
     display[i] = font[buffer[i]];
   }
 }
+
+void TIM16_IRQHandler(){
+	TIM16 -> SR &= !(TIM_SR_UIF);
+  segdisp_update();
+	show_digit();
+  offset = (offset + 1) & 0x7; // count 0 ... 7 and repeat
+}
+
+void setup_tim16(){
+	// enable RCC clock for TIM16.
+	RCC -> APB2ENR |=  RCC_APB2ENR_TIM16EN;
+	// set ARR and PSC value.
+	TIM16 -> PSC = 80 - 1;
+	TIM16 -> ARR = 60 - 1;
+	// write UIE bit.
+	TIM16 -> DIER |= TIM_DIER_UIE;
+	TIM16 -> CR1 |= TIM_CR1_CEN;
+	NVIC -> ISER[0] |= (1 << TIM16_IRQn);
+}
+
 
 //============================================================================
 // OLED display functions
@@ -203,28 +231,118 @@ void spi_display2(const char* str){
 
 
 //============================================================================
-// Timer 16 ISR()
-// The Timer 7 ISR: refresh the segment display.
-// Parameters: none
+// TIM1: PWM output.
 //============================================================================
-void TIM16_IRQHandler(){
-	TIM16 -> SR &= !(TIM_SR_UIF);
-  segdisp_update();
-	show_digit();
-  offset = (offset + 1) & 0x7; // count 0 ... 7 and repeat
+void setup_tim1()
+{
+	RCC-> AHBENR |= RCC_AHBENR_GPIOAEN;
+	// TIM1_CH1 PA8  	TIM1_CH2 PA9
+	// TIM1_CH3 PA10	TIM1_CH4 PA11
+
+	// Configure AF of PA 8-11
+	GPIOA -> MODER &= ~(0xff << 16);
+	GPIOA -> MODER |=  (0xaa << 16);
+
+	// enable RCC clock for TIM1
+	RCC -> APB2ENR |= RCC_APB2ENR_TIM1EN;
+	// Configure GPIOA -> AFR TIM1 output is AF2.
+	GPIOA -> AFR[1] &= ~(0xffff);
+	GPIOA -> AFR[1] |=  (0x2222);
+	// enable TIM1 in BDTR.
+	TIM1 -> BDTR |= TIM1_BDTR_MOE;
+	// set up clock.
+	TIM1 -> PSC = 1 - 1;
+	TIM1 -> ARR = 2400 - 1;
+	//set PWM mode 1.
+	TIM1 -> CCMR1 &= ~(0b111 << 4);
+	TIM1 -> CCMR1 |=  (0b110 << 4);
+	TIM1 -> CCMR1 &= ~(0b111 << 12);
+	TIM1 -> CCMR1 |=  (0b110 << 12);
+	TIM1 -> CCMR2 &= ~(0b111 << 4);
+	TIM1 -> CCMR2 |=  (0b110 << 4);
+	TIM1 -> CCMR2 &= ~(0b111 << 12);
+	TIM1 -> CCMR2 |=  (0b110 << 12);
+	// set preload_en for TIM1_CH4.
+	TIM1 -> CCMR2 |= TIM1_CCMR2_OC4PE;
+	// enable channel output.
+	TIM1 -> CCER |= TIM1_CCER_CC1E;
+	TIM1 -> CCER |= TIM1_CCER_CC2E;
+	TIM1 -> CCER |= TIM1_CCER_CC3E;
+	TIM1 -> CCER |= TIM1_CCER_CC4E;
+	// enable the timer.
+	//TIM1 -> DIER |= TIM_DIER_UIE;
+	TIM1 -> CR1 |= TIM_CR1_CEN;
+	//NVIC -> ISER[0] |= (1 << TIM1_CC_IRQn);
 }
 
-void setup_tim16(){
-	// enable RCC clock for TIM16.
-	RCC -> APB2ENR |=  RCC_APB2ENR_TIM16EN;
-	// set ARR and PSC value.
-	TIM16 -> PSC = 80 - 1;
-	TIM16 -> ARR = 60 - 1;
-	// write UIE bit.
-	TIM16 -> DIER |= TIM_DIER_UIE;
-	TIM16 -> CR1 |= TIM_CR1_CEN;
-	NVIC -> ISER[0] |= (1 << TIM16_IRQn);
+//============================================================================
+// RGB LED functions
+//============================================================================
+void setrgb(int r, int g, int b){
+
+	int arr = TIM1 -> ARR;
+	r = ((r >> 4) * 10 + (r & 0xf)) * (arr + 1) / 100;
+	g = ((g >> 4) * 10 + (g & 0xf)) * (arr + 1) / 100;
+	b = ((b >> 4) * 10 + (b & 0xf)) * (arr + 1) / 100;
+
+	TIM1 -> CCR1 = (arr + 1) - r;
+	TIM1 -> CCR2 = (arr + 1) - g;
+	TIM1 -> CCR3 = (arr + 1) - b;
 }
+int red = 0;
+int green = 45;
+int blue = 95;
+int step_r = 1;
+int step_g = 1;
+int step_b = 1;
+
+void TIM15_IRQHandler(){
+	TIM15 -> SR &= !(TIM_SR_UIF);
+  red += step_r;
+  green += step_g;
+  blue += step_b;
+  if (red == 99) {
+    step_r = -1;
+    red += step_r;
+  }
+  if (red == 1) {
+    step_r = 1;
+    red += step_r;
+  }
+
+  if (green == 99) {
+    step_g = -1;
+    green += step_g;
+  }
+  if (green == 1) {
+    step_g = 1;
+    green += step_g;
+  }
+
+  if (blue == 99) {
+    step_b = -1;
+    blue += step_b;
+  }
+  if (blue == 5) {
+    step_b = 1;
+    blue += step_b;
+  }
+
+  setrgb(red, green, blue);
+}
+
+void setup_tim15(){
+	// enable RCC clock for TIM15.
+	RCC -> APB2ENR |=  RCC_APB2ENR_TIM15EN;
+	// set ARR and PSC value.
+	TIM15 -> PSC = 8000 - 1;
+	TIM15 -> ARR = 300 - 1;
+	// write UIE bit.
+	TIM15 -> DIER |= TIM_DIER_UIE;
+	TIM15 -> CR1 |= TIM_CR1_CEN;
+	NVIC -> ISER[0] |= (1 << TIM15_IRQn);
+}
+
 
 
 
@@ -466,6 +584,8 @@ int main(void)
     px = -1; // Center of paddle offset (invalid initial value to force update)
     newpx = (xmax+xmin)/2; // New center of paddle
     segdisp_inil();
+    setup_tim1();
+    setup_tim15();
     setup_tim16();
     setup_tim17();
 }
